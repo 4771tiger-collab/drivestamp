@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="ja" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0d1017">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="DriveStamp">
+  <title>DriveStamp — Googleドライブ MP3 タイムスタンプメモ</title>
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" type="image/svg+xml" href="./icon.svg">
+  <link rel="apple-touch-icon" href="./icon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600;700&family=Noto+Sans+JP:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <!-- トップヘッダー -->
+  <header class="app-header">
+    <div class="header-inner">
+      <div class="brand">
+        <div class="brand-icon" aria-hidden="true">
+          <svg viewBox="0 0 32 32" fill="none">
+            <rect x="3" y="12" width="3.5" height="8" rx="1.75" fill="currentColor" opacity="0.65"/>
+            <rect x="9" y="7" width="3.5" height="18" rx="1.75" fill="currentColor"/>
+            <rect x="15" y="4" width="3.5" height="24" rx="1.75" fill="url(#brandGrad)"/>
+            <rect x="21" y="9" width="3.5" height="14" rx="1.75" fill="currentColor"/>
+            <rect x="27" y="13" width="3.5" height="6" rx="1.75" fill="currentColor" opacity="0.65"/>
+            <defs>
+              <linearGradient id="brandGrad" x1="15" y1="4" x2="18.5" y2="28" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#818cf8"/>
+                <stop offset="1" stop-color="#38bdf8"/>
+              </linearGradient>
+            </defs>
+          </svg>
+        </div>
+        <div class="brand-text">
+          <h1>DriveStamp</h1>
+          <span class="brand-sub">MP3 タイムスタンプメモ</span>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <button type="button" id="toggleSourceBtn" class="btn btn-ghost" aria-expanded="false" aria-controls="sourcePanel">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <span class="btn-label">音源を変更</span>
+        </button>
+        <button type="button" id="openShareBtn" class="btn btn-accent">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><path d="M3 14h3v3H3zM9 14h2v2H9zM3 19h2v2H3zM7 19h4v2H7z"/></svg>
+          <span class="btn-label">スマホ共有</span>
+        </button>
+        <button type="button" id="themeToggleBtn" class="btn btn-icon-only" title="テーマ切替" aria-label="ダークモードとライトモードを切り替え">
+          <svg class="icon icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+          <svg class="icon icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- 音源読込・切替ドロワー -->
+  <section id="sourcePanel" class="source-panel" hidden>
+    <div class="source-panel-inner">
+      <div class="source-header">
+        <h2>Googleドライブ公開リンクからMP3を読み込む</h2>
+        <button type="button" id="closeSourceBtn" class="btn btn-icon-only btn-sm" aria-label="閉じる">✕</button>
+      </div>
+
+      <form id="driveUrlForm" class="url-form">
+        <div class="url-input-group">
+          <input
+            type="text"
+            inputmode="url"
+            id="driveUrlInput"
+            placeholder="https://drive.google.com/file/d/.../view?usp=drive_link"
+            autocomplete="off"
+            spellcheck="false"
+            required
+          >
+          <input
+            type="text"
+            id="driveTitleInput"
+            class="title-optional-input"
+            placeholder="タイトル（任意）"
+            autocomplete="off"
+          >
+          <button type="submit" class="btn btn-primary">読み込む</button>
+        </div>
+        <div class="source-meta-row">
+          <p class="hint-text">
+            Googleドライブの共有設定が「リンクを知っている全員」のMP3に対応しています（直接MP3のURLも可）。
+          </p>
+          <label class="btn btn-ghost btn-sm file-picker-btn">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+            端末のMP3を開く
+            <input type="file" id="localFileInput" accept="audio/*,.mp3" hidden>
+          </label>
+        </div>
+      </form>
+
+      <div id="trackHistoryWrap" class="track-history-wrap">
+        <div class="track-history-label">保存済みの音源</div>
+        <div id="trackHistoryList" class="track-history-list"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- メインコンテンツ -->
+  <main class="workspace">
+    <!-- 左カラム：オーディオプレイヤー -->
+    <section class="player-column">
+      <div id="playerCard" class="card player-card">
+        <!-- トラック情報 -->
+        <div class="track-header">
+          <div class="track-title-wrap">
+            <button type="button" id="trackTitleBtn" class="track-title-btn" title="タップしてタイトルを編集">
+              <span id="trackTitleText">音楽決定稿.mp3</span>
+              <svg class="icon icon-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            </button>
+            <input type="text" id="trackTitleEdit" class="track-title-input" hidden maxlength="80" aria-label="トラックタイトルを編集">
+          </div>
+          <div class="track-badges">
+            <span id="sourceBadge" class="badge badge-drive">Google Drive</span>
+            <span id="audioStatusBadge" class="badge badge-status">読み込み待機</span>
+            <a id="driveOpenLink" class="badge badge-link" href="#" target="_blank" rel="noopener noreferrer" title="Googleドライブで開く">元ファイル ↗</a>
+          </div>
+        </div>
+
+        <!-- 読み込みプログレス / エラーバナー -->
+        <div id="loadProgressBox" class="load-box" hidden>
+          <div class="load-box-top">
+            <span id="loadProgressLabel">GoogleドライブからMP3を取得中...</span>
+            <span id="loadProgressPercent" class="mono">0%</span>
+          </div>
+          <div class="load-progress-track">
+            <div id="loadProgressBar" class="load-progress-bar"></div>
+          </div>
+        </div>
+
+        <div id="loadErrorBox" class="error-box" hidden>
+          <div class="error-box-title">音声を読み込めませんでした</div>
+          <p id="loadErrorText" class="error-box-msg"></p>
+          <div class="error-box-actions">
+            <button type="button" id="retryLoadBtn" class="btn btn-sm btn-primary">再試行</button>
+            <button type="button" id="streamFallbackBtn" class="btn btn-sm btn-ghost">直接ストリーミングを試す</button>
+          </div>
+        </div>
+
+        <!-- 波形シークバー + メモピン -->
+        <div class="waveform-section">
+          <div id="waveformContainer" class="waveform-container" tabindex="0" role="slider" aria-label="再生位置シークバー" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <canvas id="waveformCanvas"></canvas>
+            <div id="waveformPins" class="waveform-pins" aria-hidden="true"></div>
+            <div id="abOverlay" class="ab-overlay" hidden></div>
+            <div id="waveformTooltip" class="waveform-tooltip" hidden>00:00</div>
+          </div>
+          <div class="time-row mono">
+            <span id="currentTimeLabel">0:00</span>
+            <span id="remainingTimeLabel" class="time-sub">-0:00</span>
+            <span id="durationLabel">0:00</span>
+          </div>
+        </div>
+
+        <!-- メイン操作ボタン -->
+        <div class="transport-row">
+          <button type="button" id="seekBackBtn" class="btn btn-transport" title="5秒戻る (←)" aria-label="5秒戻る">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 17l-5-5 5-5"/><path d="M18 17l-5-5 5-5"/></svg>
+            <span class="transport-sub">-5s</span>
+          </button>
+
+          <button type="button" id="playPauseBtn" class="btn btn-play" title="再生 / 一時停止 (Space)" aria-label="再生または一時停止">
+            <svg class="icon icon-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v13.72a1 1 0 0 0 1.53.85l10.67-6.86a1 1 0 0 0 0-1.7L9.53 4.29A1 1 0 0 0 8 5.14z"/></svg>
+            <svg class="icon icon-pause" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4.5" height="16" rx="1.5"/><rect x="13.5" y="4" width="4.5" height="16" rx="1.5"/></svg>
+          </button>
+
+          <button type="button" id="seekFwdBtn" class="btn btn-transport" title="5秒進む (→)" aria-label="5秒進む">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 17l5-5-5-5"/><path d="M6 17l5-5-5-5"/></svg>
+            <span class="transport-sub">+5s</span>
+          </button>
+
+          <button type="button" id="quickMarkBtn" class="btn btn-quick-mark" title="現在の再生位置をすぐブックマーク (B)">
+            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+            <span>今をマーク</span>
+          </button>
+        </div>
+
+        <!-- サブ操作（速度・ループ・A-Bリピート・音量） -->
+        <div class="sub-controls-row">
+          <div class="control-group">
+            <label for="speedSelect" class="sr-only">再生速度</label>
+            <select id="speedSelect" class="pill-select" title="再生速度">
+              <option value="0.5">0.5x</option>
+              <option value="0.75">0.75x</option>
+              <option value="1" selected>1.0x</option>
+              <option value="1.25">1.25x</option>
+              <option value="1.5">1.5x</option>
+              <option value="2">2.0x</option>
+            </select>
+
+            <button type="button" id="loopBtn" class="pill-btn" aria-pressed="false" title="全曲ループ切替">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+              <span>ループ</span>
+            </button>
+
+            <button type="button" id="abRepeatBtn" class="pill-btn" title="A-B区間リピート（1回目:A点設定 / 2回目:B点設定 / 3回目:解除）">
+              <span id="abRepeatLabel">A-B</span>
+            </button>
+          </div>
+
+          <div class="volume-group">
+            <button type="button" id="muteBtn" class="btn btn-icon-only btn-sm" aria-label="ミュート切替" title="ミュート切替">
+              <svg class="icon icon-vol-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+              <svg class="icon icon-vol-off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+            </button>
+            <input type="range" id="volumeSlider" class="volume-slider" min="0" max="1" step="0.02" value="1" aria-label="音量">
+          </div>
+        </div>
+
+        <!-- PCキーボードショートカット案内 -->
+        <div class="shortcut-hint">
+          <span><kbd>Space</kbd> 再生/停止</span>
+          <span><kbd>←</kbd><kbd>→</kbd> ±5秒</span>
+          <span><kbd>M</kbd> メモ入力</span>
+          <span><kbd>B</kbd> 今をマーク</span>
+        </div>
+
+        <audio id="audioEl" preload="metadata" crossorigin="anonymous" playsinline></audio>
+      </div>
+    </section>
+
+    <!-- 右カラム：YouTube風タイムスタンプコメント＆メモ -->
+    <section class="memo-column">
+      <div class="card memo-card">
+        <div class="memo-header">
+          <div class="memo-title-group">
+            <h2>タイムスタンプメモ</h2>
+            <span id="memoCountBadge" class="count-badge">0件</span>
+          </div>
+          <div class="memo-header-actions">
+            <button type="button" id="copyYoutubeTextBtn" class="btn btn-ghost btn-sm" title="YouTubeコメント形式で全メモをコピー">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              <span>一覧コピー</span>
+            </button>
+            <button type="button" id="openIoBtn" class="btn btn-ghost btn-sm" title="テキスト一括取込やJSONバックアップ">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
+              <span>取込/保存</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- メモ投稿フォーム -->
+        <form id="memoForm" class="memo-composer">
+          <div class="composer-top">
+            <div class="ts-picker">
+              <button type="button" id="tsMinusBtn" class="ts-step-btn" title="1秒前へ" aria-label="タイムスタンプを1秒戻す">-1s</button>
+              <input
+                type="text"
+                id="memoTimeInput"
+                class="ts-input mono"
+                value="0:00"
+                inputmode="numeric"
+                aria-label="メモのタイムスタンプ"
+                title="再生位置（例: 1:24）。直接編集もできます"
+              >
+              <button type="button" id="tsPlusBtn" class="ts-step-btn" title="1秒後へ" aria-label="タイムスタンプを1秒進める">+1s</button>
+              <button type="button" id="tsSyncBtn" class="ts-sync-btn is-live" title="現在の再生位置に同期">
+                <span class="live-dot"></span>
+                <span id="tsSyncLabel">連動中</span>
+              </button>
+            </div>
+
+            <div class="tag-picker" role="radiogroup" aria-label="メモの種別">
+              <button type="button" class="tag-option is-selected" data-tag="memo">メモ</button>
+              <button type="button" class="tag-option" data-tag="fix">修正</button>
+              <button type="button" class="tag-option" data-tag="good">良い</button>
+              <button type="button" class="tag-option" data-tag="important">重要</button>
+            </div>
+          </div>
+
+          <div class="composer-body">
+            <textarea
+              id="memoTextInput"
+              rows="2"
+              placeholder="この再生位置のメモを入力...（本文中の 1:24 のような表記も自動でジャンプ可能になります）"
+              required
+            ></textarea>
+          </div>
+
+          <div class="composer-footer">
+            <input
+              type="text"
+              id="memoAuthorInput"
+              class="author-input"
+              placeholder="名前（任意）"
+              maxlength="24"
+              aria-label="投稿者名（任意）"
+            >
+            <button type="submit" class="btn btn-primary composer-submit">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+              <span>保存する</span>
+            </button>
+          </div>
+        </form>
+
+        <!-- フィルタ＆並び替え -->
+        <div class="memo-toolbar">
+          <div class="filter-chips" id="filterChips">
+            <button type="button" class="filter-chip is-active" data-filter="all">すべて</button>
+            <button type="button" class="filter-chip" data-filter="memo">メモ</button>
+            <button type="button" class="filter-chip" data-filter="fix">修正</button>
+            <button type="button" class="filter-chip" data-filter="good">良い</button>
+            <button type="button" class="filter-chip" data-filter="important">重要</button>
+          </div>
+
+          <div class="toolbar-right">
+            <input type="search" id="memoSearchInput" class="search-input" placeholder="検索..." aria-label="メモを検索">
+            <select id="memoSortSelect" class="pill-select pill-select-sm" aria-label="並び替え">
+              <option value="time-asc">時間順</option>
+              <option value="newest">新しい順</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- メモ一覧 -->
+        <div id="memoList" class="memo-list" aria-live="polite"></div>
+      </div>
+    </section>
+  </main>
+
+  <!-- スマホスクロール時のフローティングミニプレイヤー -->
+  <div id="miniPlayer" class="mini-player" hidden>
+    <button type="button" id="miniPlayBtn" class="mini-play-btn" aria-label="再生または一時停止">
+      <svg class="icon icon-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.14v13.72a1 1 0 0 0 1.53.85l10.67-6.86a1 1 0 0 0 0-1.7L9.53 4.29A1 1 0 0 0 8 5.14z"/></svg>
+      <svg class="icon icon-pause" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4.5" height="16" rx="1.5"/><rect x="13.5" y="4" width="4.5" height="16" rx="1.5"/></svg>
+    </button>
+    <div class="mini-info">
+      <div id="miniTitle" class="mini-title">音楽決定稿.mp3</div>
+      <div class="mini-time mono"><span id="miniCurrentTime">0:00</span> / <span id="miniDuration">0:00</span></div>
+    </div>
+    <div class="mini-actions">
+      <button type="button" id="miniBackBtn" class="btn btn-ghost btn-sm">-5s</button>
+      <button type="button" id="miniMarkBtn" class="btn btn-accent btn-sm">マーク</button>
+    </div>
+  </div>
+
+  <!-- スマホ共有・QRコードモーダル -->
+  <div id="shareModal" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="shareModalTitle">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="shareModalTitle">スマホで開く・メモを共有</h3>
+        <button type="button" class="btn btn-icon-only btn-sm modal-close" data-close="shareModal" aria-label="閉じる">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="localhostNotice" class="notice-banner" hidden>
+          現在ローカルアドレス（localhost）で開いています。GitHub Pagesなどに公開したURLから開くと、下のQRコードやURLをそのままスマホで読み取って再生できます。
+        </div>
+
+        <label class="toggle-row">
+          <input type="checkbox" id="shareIncludeMemos" checked>
+          <span>現在のタイムスタンプメモ（<span id="shareMemoCount">0</span>件）もURLに含める</span>
+        </label>
+
+        <div class="qr-box">
+          <canvas id="qrCanvas" width="220" height="220"></canvas>
+          <p id="qrCaption" class="qr-caption">スマホのカメラで読み取ると、この音源とメモが開きます</p>
+        </div>
+
+        <div class="share-url-row">
+          <input type="text" id="shareUrlOutput" class="mono" readonly aria-label="共有URL">
+          <button type="button" id="copyShareUrlBtn" class="btn btn-primary">コピー</button>
+        </div>
+
+        <div class="share-footer-actions">
+          <button type="button" id="nativeShareBtn" class="btn btn-accent" hidden>他のアプリで共有（LINE / AirDrop等）</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 一括取込 / バックアップモーダル -->
+  <div id="ioModal" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="ioModalTitle">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 id="ioModalTitle">メモの一括取込・バックアップ</h3>
+        <button type="button" class="btn btn-icon-only btn-sm modal-close" data-close="ioModal" aria-label="閉じる">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="io-section">
+          <h4>YouTube形式のテキストから一括追加</h4>
+          <p class="hint-text">「0:15 イントロがいい」「1:24 サビの音量調整」のように、タイムスタンプを含む行をまとめて貼り付けると自動登録されます。</p>
+          <textarea id="bulkImportTextarea" rows="5" placeholder="0:12 イントロの雰囲気OK&#10;1:05 サビ前の間を少し長めに&#10;2:18 アウトロのフェードアウト確認"></textarea>
+          <div class="io-btn-row">
+            <button type="button" id="bulkImportBtn" class="btn btn-primary btn-sm">テキストから取り込む</button>
+          </div>
+        </div>
+
+        <hr class="modal-divider">
+
+        <div class="io-section">
+          <h4>JSONバックアップ（別端末への移行用）</h4>
+          <div class="io-btn-row">
+            <button type="button" id="exportJsonBtn" class="btn btn-ghost btn-sm">JSONを書き出す</button>
+            <label class="btn btn-ghost btn-sm file-picker-btn">
+              JSONを読み込む
+              <input type="file" id="importJsonInput" accept="application/json,.json" hidden>
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- トースト通知 -->
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden>
+    <span id="toastMessage"></span>
+    <button type="button" id="toastUndoBtn" class="toast-undo" hidden>元に戻す</button>
+  </div>
+
+  <script src="./qrcode.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

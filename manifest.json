@@ -1,0 +1,18 @@
+{
+  "name": "DriveStamp - MP3タイムスタンプメモ",
+  "short_name": "DriveStamp",
+  "description": "Googleドライブの公開MP3を再生し、YouTubeコメントのようにタイムスタンプ付きメモを残せるプレイヤー",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0d1017",
+  "theme_color": "#0d1017",
+  "lang": "ja",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
