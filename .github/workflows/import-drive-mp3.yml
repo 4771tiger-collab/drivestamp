@@ -1,0 +1,143 @@
+name: GoogleドライブからMP3を取り込む
+
+on:
+  workflow_dispatch:
+    inputs:
+      drive_url:
+        description: 'Googleドライブの公開リンク（またはファイルID）'
+        required: true
+        type: string
+      title:
+        description: '表示タイトル（空欄ならドライブ上のファイル名を自動取得）'
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  import-mp3:
+    runs-on: ubuntu-latest
+    steps:
+      - name: リポジトリをチェックアウト
+        uses: actions/checkout@v4
+
+      - name: GoogleドライブからMP3を取得して登録
+        env:
+          INPUT_URL: ${{ github.event.inputs.drive_url }}
+          INPUT_TITLE: ${{ github.event.inputs.title }}
+        run: |
+          node - <<'EOF'
+          const fs = require('fs');
+          const path = require('path');
+
+          async function main() {
+            const raw = (process.env.INPUT_URL || '').trim();
+            const customTitle = (process.env.INPUT_TITLE || '').trim();
+
+            let fileId = null;
+            if (/^[a-zA-Z0-9_-]{20,60}$/.test(raw)) {
+              fileId = raw;
+            } else {
+              for (const re of [
+                /\/file\/d\/([a-zA-Z0-9_-]{10,})/,
+                /\/d\/([a-zA-Z0-9_-]{10,})/,
+                /[?&]id=([a-zA-Z0-9_-]{10,})/,
+              ]) {
+                const m = raw.match(re);
+                if (m && m[1]) { fileId = m[1]; break; }
+              }
+            }
+
+            if (!fileId) {
+              throw new Error('GoogleドライブのファイルIDを抽出できませんでした: ' + raw);
+            }
+
+            const downloadUrl = `https://drive.usercontent.google.com/download?id=${encodeURIComponent(fileId)}&export=download&confirm=t`;
+            console.log('Downloading:', downloadUrl);
+
+            const res = await fetch(downloadUrl, { redirect: 'follow' });
+            if (!res.ok) {
+              throw new Error(`ダウンロードに失敗しました (HTTP ${res.status})`);
+            }
+
+            const ct = (res.headers.get('content-type') || '').toLowerCase();
+            if (ct.includes('text/html')) {
+              throw new Error('HTMLページが返されました。Googleドライブの共有設定が「リンクを知っている全員」になっているか確認してください。');
+            }
+
+            const buf = Buffer.from(await res.arrayBuffer());
+            if (buf.length === 0) {
+              throw new Error('取得したファイルが空でした。');
+            }
+            if (buf.length > 90 * 1024 * 1024) {
+              throw new Error('ファイルサイズが90MBを超えています（GitHubの上限対策のため中断しました）。');
+            }
+
+            // Content-Disposition からファイル名を取得
+            let detectedTitle = '';
+            const cd = res.headers.get('content-disposition') || '';
+            const utf8Match = cd.match(/filename\*\s*=\s*UTF-8''([^;\r\n]+)/i);
+            const plainMatch = cd.match(/filename\s*=\s*"([^"]+)"/i);
+            if (utf8Match && utf8Match[1]) {
+              detectedTitle = decodeURIComponent(utf8Match[1]);
+            } else if (plainMatch && plainMatch[1]) {
+              detectedTitle = plainMatch[1];
+            }
+
+            const finalTitle = customTitle || detectedTitle || `${fileId}.mp3`;
+            const audioDir = path.join(process.cwd(), 'audio');
+            fs.mkdirSync(audioDir, { recursive: true });
+
+            const outFile = path.join(audioDir, `${fileId}.mp3`);
+            fs.writeFileSync(outFile, buf);
+            console.log(`Saved ${outFile} (${buf.length} bytes), title="${finalTitle}"`);
+
+            // audio/tracks.json を更新
+            const manifestPath = path.join(audioDir, 'tracks.json');
+            let manifest = { tracks: [] };
+            if (fs.existsSync(manifestPath)) {
+              try {
+                manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+                if (!Array.isArray(manifest.tracks)) manifest.tracks = [];
+              } catch (_) {
+                manifest = { tracks: [] };
+              }
+            }
+
+            const entry = {
+              fileId,
+              title: finalTitle,
+              path: `./audio/${fileId}.mp3`,
+              driveUrl: `https://drive.google.com/file/d/${fileId}/view?usp=drive_link`,
+              addedAt: new Date().toISOString(),
+            };
+
+            const idx = manifest.tracks.findIndex((t) => t.fileId === fileId);
+            if (idx >= 0) {
+              manifest.tracks[idx] = entry;
+            } else {
+              manifest.tracks.unshift(entry);
+            }
+
+            fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+          }
+
+          main().catch((err) => {
+            console.error(err);
+            process.exit(1);
+          });
+          EOF
+
+      - name: 取り込んだMP3をコミットして公開
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add audio/
+          if git diff --cached --quiet; then
+            echo "変更がないためコミットをスキップします"
+          else
+            git commit -m "Add MP3 from Google Drive"
+            git push
+          fi

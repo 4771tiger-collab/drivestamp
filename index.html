@@ -89,18 +89,52 @@
         </div>
         <div class="source-meta-row">
           <p class="hint-text">
-            Googleドライブの共有設定が「リンクを知っている全員」のMP3に対応しています（直接MP3のURLも可）。
+            Googleドライブ公開リンク・GitHub Raw URL・直接MP3 URLに対応しています。
           </p>
-          <label class="btn btn-ghost btn-sm file-picker-btn">
-            <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
-            端末のMP3を開く
-            <input type="file" id="localFileInput" accept="audio/*,.mp3" hidden>
-          </label>
+          <div class="source-meta-actions">
+            <a
+              id="githubImportActionLink"
+              class="btn btn-accent btn-sm"
+              href="https://github.com/4771tiger-collab/drivestamp/actions/workflows/import-drive-mp3.yml"
+              target="_blank"
+              rel="noopener noreferrer"
+              title="GitHub Actionsで新しいGoogleドライブMP3をリポジトリへ取り込む"
+            >GitHubでドライブ音源を追加 ↗</a>
+            <label class="btn btn-ghost btn-sm file-picker-btn">
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>
+              端末のMP3を開く
+              <input type="file" id="localFileInput" accept="audio/*,.mp3" hidden>
+            </label>
+          </div>
         </div>
       </form>
 
+      <!-- Googleドライブ直接読込オプション設定（GAS / APIキー） -->
+      <details id="driveBridgeDetails" class="bridge-details">
+        <summary>Googleドライブ公開リンクをアプリ上で直接読み込む設定（任意・上級向け）</summary>
+        <div class="bridge-body">
+          <p class="hint-text">
+            Googleドライブ側の仕様により外部サイトからの直リンク取得は403ブロックされます。未取込のGoogleドライブリンクをそのまま再生したい場合は、下のどちらかを設定するか「GitHubでドライブ音源を追加」をご利用ください。
+          </p>
+          <div class="bridge-grid">
+            <label class="bridge-field">
+              <span>Google Apps Script ウェブアプリURL（無料・推奨）</span>
+              <input type="text" id="gasUrlInput" placeholder="https://script.google.com/macros/s/.../exec" autocomplete="off" spellcheck="false">
+            </label>
+            <label class="bridge-field">
+              <span>または Google Drive API キー</span>
+              <input type="password" id="driveApiKeyInput" placeholder="AIza..." autocomplete="off" spellcheck="false">
+            </label>
+          </div>
+          <div class="bridge-actions">
+            <button type="button" id="saveBridgeBtn" class="btn btn-primary btn-sm">設定を保存</button>
+            <button type="button" id="clearBridgeBtn" class="btn btn-ghost btn-sm">クリア</button>
+          </div>
+        </div>
+      </details>
+
       <div id="trackHistoryWrap" class="track-history-wrap">
-        <div class="track-history-label">保存済みの音源</div>
+        <div class="track-history-label">利用可能な音源</div>
         <div id="trackHistoryList" class="track-history-list"></div>
       </div>
     </div>
@@ -139,12 +173,24 @@
         </div>
 
         <div id="loadErrorBox" class="error-box" hidden>
-          <div class="error-box-title">音声を読み込めませんでした</div>
+          <div class="error-box-title">音声を直接読み込めませんでした</div>
           <p id="loadErrorText" class="error-box-msg"></p>
           <div class="error-box-actions">
             <button type="button" id="retryLoadBtn" class="btn btn-sm btn-primary">再試行</button>
-            <button type="button" id="streamFallbackBtn" class="btn btn-sm btn-ghost">直接ストリーミングを試す</button>
+            <button type="button" id="embedFallbackBtn" class="btn btn-sm btn-accent" hidden>Google公式プレイヤーで再生</button>
+            <a id="errorImportActionBtn" class="btn btn-sm btn-ghost" href="https://github.com/4771tiger-collab/drivestamp/actions/workflows/import-drive-mp3.yml" target="_blank" rel="noopener noreferrer" hidden>GitHubに取り込む ↗</a>
+            <button type="button" id="openBridgeConfigBtn" class="btn btn-sm btn-ghost" hidden>連携設定を開く</button>
           </div>
+        </div>
+
+        <!-- Googleドライブ公式埋め込みプレイヤー（フォールバック用） -->
+        <div id="driveEmbedWrap" class="drive-embed-wrap" hidden>
+          <div class="drive-embed-head">
+            <span>Googleドライブ公式プレイヤー（埋め込みモード）</span>
+            <button type="button" id="closeEmbedBtn" class="btn btn-ghost btn-sm">閉じる</button>
+          </div>
+          <iframe id="driveEmbedIframe" class="drive-embed-iframe" allow="autoplay" title="Google Drive 音声プレイヤー"></iframe>
+          <p class="hint-text">※埋め込みモードではGoogleの仕様上、タイムスタンプの自動ジャンプは動作しません。フル機能を使うには「GitHubに取り込む」か「連携設定」をご利用ください。</p>
         </div>
 
         <!-- 波形シークバー + メモピン -->
@@ -225,7 +271,7 @@
           <span><kbd>B</kbd> 今をマーク</span>
         </div>
 
-        <audio id="audioEl" preload="metadata" crossorigin="anonymous" playsinline></audio>
+        <audio id="audioEl" preload="metadata" playsinline></audio>
       </div>
     </section>
 

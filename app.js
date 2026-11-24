@@ -37,6 +37,11 @@
     driveUrlInput: $('driveUrlInput'),
     driveTitleInput: $('driveTitleInput'),
     localFileInput: $('localFileInput'),
+    driveBridgeDetails: $('driveBridgeDetails'),
+    gasUrlInput: $('gasUrlInput'),
+    driveApiKeyInput: $('driveApiKeyInput'),
+    saveBridgeBtn: $('saveBridgeBtn'),
+    clearBridgeBtn: $('clearBridgeBtn'),
     trackHistoryWrap: $('trackHistoryWrap'),
     trackHistoryList: $('trackHistoryList'),
 
@@ -59,7 +64,13 @@
     loadErrorBox: $('loadErrorBox'),
     loadErrorText: $('loadErrorText'),
     retryLoadBtn: $('retryLoadBtn'),
-    streamFallbackBtn: $('streamFallbackBtn'),
+    embedFallbackBtn: $('embedFallbackBtn'),
+    errorImportActionBtn: $('errorImportActionBtn'),
+    openBridgeConfigBtn: $('openBridgeConfigBtn'),
+
+    driveEmbedWrap: $('driveEmbedWrap'),
+    driveEmbedIframe: $('driveEmbedIframe'),
+    closeEmbedBtn: $('closeEmbedBtn'),
 
     waveformContainer: $('waveformContainer'),
     waveformCanvas: $('waveformCanvas'),
@@ -140,6 +151,8 @@
     blobUrl: null,
     fetchAbort: null,
     peaks: null,
+    decodedDuration: 0,
+    hostedAudioMap: new Map(), // fileId -> { path, title, driveUrl }
     isScrubbing: false,
     scrubPercent: 0,
     isTimeLocked: false,
@@ -153,6 +166,7 @@
     abStart: null,
     abEnd: null,
     pendingJumpSec: null,
+    pendingAutoPlay: false,
     toastTimer: null,
     undoCallback: null,
     lastSavePosAt: 0,
@@ -438,17 +452,98 @@
     els.loadProgressBox.hidden = true;
   }
 
-  function showLoadError(msg) {
+  /** 外部MP3リンク（GitHub / Dropbox等）を直接再生URLへ正規化 */
+  function normalizeDirectAudioUrl(url) {
+    const trimmed = String(url || '').trim();
+    // GitHub blob URL -> raw.githubusercontent.com
+    const ghMatch = trimmed.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/blob\/(.+)$/i);
+    if (ghMatch) {
+      return `https://raw.githubusercontent.com/${ghMatch[1]}/${ghMatch[2]}/${ghMatch[3]}`;
+    }
+    // Dropbox 共有リンク -> raw=1
+    if (/^https?:\/\/(www\.)?dropbox\.com\//i.test(trimmed)) {
+      const u = new URL(trimmed);
+      u.searchParams.delete('dl');
+      u.searchParams.set('raw', '1');
+      return u.toString();
+    }
+    return trimmed;
+  }
+
+  /** リポジトリ同梱の audio/tracks.json を読み込み、利用可能な音源一覧を自動登録 */
+  async function loadHostedManifest() {
+    try {
+      const res = await fetch(`./audio/tracks.json?v=${Date.now()}`, { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data || !Array.isArray(data.tracks)) return;
+
+      let changed = false;
+      for (const item of data.tracks) {
+        if (!item || !item.fileId || !item.path) continue;
+        runtime.hostedAudioMap.set(item.fileId, item);
+        const key = `gdrive:${item.fileId}`;
+        if (!state.tracks[key]) {
+          state.tracks[key] = {
+            key,
+            type: 'gdrive',
+            fileId: item.fileId,
+            sourceUrl: item.driveUrl || buildDriveViewUrl(item.fileId),
+            title: item.title || `${item.fileId}.mp3`,
+            lastPosition: 0,
+            updatedAt: Date.now(),
+            memos: [],
+          };
+          changed = true;
+        } else if (
+          item.title &&
+          (state.tracks[key].title === 'Google Drive MP3' || state.tracks[key].title === `${item.fileId}.mp3`)
+        ) {
+          state.tracks[key].title = item.title;
+          changed = true;
+        }
+      }
+      if (changed) saveState();
+    } catch (_) {
+      // tracks.json が無い環境でもそのまま継続
+    }
+  }
+
+  function showLoadError(msg, options = {}) {
     hideLoadProgress();
     els.loadErrorText.textContent = msg;
     els.loadErrorBox.hidden = false;
+    const isDrive = Boolean(options.isDrive);
+    els.embedFallbackBtn.hidden = !isDrive;
+    els.errorImportActionBtn.hidden = !isDrive;
+    els.openBridgeConfigBtn.hidden = !isDrive;
     setAudioStatus('読み込みエラー', 'error');
+  }
+
+  function hideDriveEmbed() {
+    els.driveEmbedWrap.hidden = true;
+    els.driveEmbedIframe.removeAttribute('src');
+  }
+
+  function showDriveEmbed(fileId) {
+    els.loadErrorBox.hidden = true;
+    els.driveEmbedIframe.src = `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/preview`;
+    els.driveEmbedWrap.hidden = false;
+    setAudioStatus('公式プレイヤー表示中', 'ready');
   }
 
   function clearAbRepeat() {
     runtime.abStart = null;
     runtime.abEnd = null;
     updateAbRepeatUi();
+  }
+
+  /** 有効な再生時間（audio.duration または WebAudioデコード済み時間）を取得 */
+  function getEffectiveDuration() {
+    if (Number.isFinite(els.audio.duration) && els.audio.duration > 0) {
+      return els.audio.duration;
+    }
+    return runtime.decodedDuration || 0;
   }
 
   async function loadTrack(trackKey, options = {}) {
@@ -470,8 +565,11 @@
     }
 
     runtime.peaks = null;
+    runtime.decodedDuration = 0;
     runtime.editingMemoId = null;
     runtime.activeMemoId = null;
+    hideDriveEmbed();
+    els.loadErrorBox.hidden = true;
     clearAbRepeat();
     unlockTimeSync();
 
@@ -481,7 +579,7 @@
     renderMemos();
     drawWaveform();
 
-    // ローカルファイルの場合
+    // 1. ローカルファイルの場合
     if (track.type === 'local') {
       const file = runtime.localFileBlobMap.get(track.key);
       if (!file) {
@@ -498,26 +596,152 @@
       return;
     }
 
-    const directUrl = track.type === 'gdrive'
-      ? buildDriveDirectUrl(track.fileId)
-      : track.sourceUrl;
-
-    if (options.forceStream) {
-      loadViaDirectStream(directUrl);
+    // 2. Googleドライブ音源の場合：最適な読込ルートを自動選択
+    if (track.type === 'gdrive') {
+      await loadGoogleDriveTrack(track);
       return;
     }
 
-    // 通常の推奨ルート：CORS fetch で1回取得 → Blob再生（iPhone Safari安定＆高速シーク＆実波形）
-    await loadViaFetchBlob(directUrl, track);
+    // 3. 一般Web MP3 URLの場合
+    const directUrl = normalizeDirectAudioUrl(track.sourceUrl);
+    await loadViaFetchBlob(directUrl, track, { allowDirectStreamFallback: true });
   }
 
-  async function loadViaFetchBlob(directUrl, track) {
+  /**
+   * Googleドライブ音源の多段読込ルート:
+   *  (1) 同一オリジン配信 (./audio/{fileId}.mp3) — iOS Safari含め100%安定＆最速
+   *  (2) ユーザー設定の Google Apps Script ウェブアプリ経由
+   *  (3) ユーザー設定の Google Drive API v3 (APIキー) 経由
+   *  (4) いずれも無い場合は原因と対策（GitHub Actions取込 / 公式埋込プレイヤー / 連携設定）を案内
+   */
+  async function loadGoogleDriveTrack(track) {
+    const fileId = track.fileId;
+    const hostedInfo = runtime.hostedAudioMap.get(fileId);
+    const candidatePath = hostedInfo ? hostedInfo.path : `./audio/${encodeURIComponent(fileId)}.mp3`;
+
+    // ルート1: リポジトリ同梱の同一オリジン音声をチェック（GitHub Pages / ローカル共通）
+    try {
+      setAudioStatus('音源確認中...', 'loading');
+      const headRes = await fetch(candidatePath, { method: 'HEAD' });
+      const ct = (headRes.headers.get('content-type') || '').toLowerCase();
+      if (headRes.ok && !ct.includes('text/html')) {
+        // 同一オリジンURLを直接 <audio> に設定（iPhone Safari の Range シークに完全対応）
+        els.audio.removeAttribute('crossorigin');
+        els.audio.src = candidatePath;
+        els.audio.load();
+        hideLoadProgress();
+        setAudioStatus('再生可能', 'ready');
+
+        // バックグラウンドで実波形をデコード（再生開始をブロックしない）
+        fetchWaveformInBackground(candidatePath);
+        return;
+      }
+    } catch (_) {
+      // 同梱ファイルが無い場合は次ルートへ
+    }
+
+    // ルート2: Google Apps Script ウェブアプリ経由
+    const gasUrl = (state.gasUrl || '').trim();
+    if (gasUrl) {
+      const ok = await loadViaGasBridge(gasUrl, track);
+      if (ok) return;
+    }
+
+    // ルート3: Google Drive API v3（APIキー設定時）
+    const apiKey = (state.driveApiKey || '').trim();
+    if (apiKey) {
+      const apiUrl = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?alt=media&key=${encodeURIComponent(apiKey)}`;
+      const ok = await loadViaFetchBlob(apiUrl, track, { allowDirectStreamFallback: false });
+      if (ok) return;
+    }
+
+    // ルート4: Googleドライブ直リンクはブラウザの Sec-Fetch-Site: cross-site 制限で 403 になるため、
+    // ユーザーに明確な理由と即座に使える回避手段を提示
+    showLoadError(
+      'Googleドライブのセキュリティ仕様（cross-site制限）により、外部サイトからGoogleドライブの公開リンクを直接読み込むと 403 ブロックされます（共有設定が「リンクを知っている全員」でも発生します）。\n「GitHubに取り込む」から1クリックで登録するか、下の「Google公式プレイヤーで再生」／「連携設定」をご利用ください。',
+      { isDrive: true }
+    );
+  }
+
+  /** 同一オリジンMP3をバックグラウンド取得して波形だけ描画（再生は待たせない） */
+  async function fetchWaveformInBackground(url) {
+    const controller = new AbortController();
+    runtime.fetchAbort = controller;
+    try {
+      const res = await fetch(url, { signal: controller.signal });
+      if (!res.ok) return;
+      const total = parseInt(res.headers.get('content-length') || '0', 10) || 0;
+      if (total > MAX_BLOB_FETCH_BYTES) return;
+      const buf = await res.arrayBuffer();
+      if (controller.signal.aborted) return;
+      await decodeWaveformAsync(buf);
+    } catch (_) {
+      // 波形取得失敗でも再生自体は継続
+    } finally {
+      if (runtime.fetchAbort === controller) {
+        runtime.fetchAbort = null;
+      }
+    }
+  }
+
+  /** Google Apps Script ウェブアプリからBase64 JSONを受け取って再生 */
+  async function loadViaGasBridge(gasUrl, track) {
+    const controller = new AbortController();
+    runtime.fetchAbort = controller;
+    setAudioStatus('GAS経由で取得中...', 'loading');
+    showLoadProgress('Google Apps Script経由でMP3を取得中...', 35);
+
+    try {
+      const sep = gasUrl.includes('?') ? '&' : '?';
+      const endpoint = `${gasUrl}${sep}id=${encodeURIComponent(track.fileId)}`;
+      const res = await fetch(endpoint, { mode: 'cors', signal: controller.signal });
+      if (!res.ok) throw new Error(`GAS HTTP ${res.status}`);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      if (!data.base64) throw new Error('音声データが含まれていません');
+
+      showLoadProgress('音声データを展開中...', 85);
+      const bin = atob(data.base64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+
+      const blob = new Blob([bytes], { type: data.mimeType || 'audio/mpeg' });
+      const blobUrl = URL.createObjectURL(blob);
+      runtime.blobUrl = blobUrl;
+
+      els.audio.removeAttribute('crossorigin');
+      els.audio.src = blobUrl;
+      els.audio.load();
+
+      if (data.name && (track.title === 'Google Drive MP3' || track.title.startsWith('Drive音声'))) {
+        track.title = data.name;
+        saveState();
+        updateTrackHeaderUi();
+        renderTrackHistory();
+      }
+
+      hideLoadProgress();
+      setAudioStatus('再生可能 (GAS)', 'ready');
+      decodeWaveformAsync(bytes.buffer.slice(0));
+      return true;
+    } catch (err) {
+      if (err && err.name === 'AbortError') return true;
+      console.warn('GAS bridge error:', err);
+      hideLoadProgress();
+      showLoadError(`Google Apps Script経由の取得に失敗しました: ${err.message || err}`, { isDrive: true });
+      return false;
+    } finally {
+      if (runtime.fetchAbort === controller) runtime.fetchAbort = null;
+    }
+  }
+
+  async function loadViaFetchBlob(directUrl, track, { allowDirectStreamFallback = true } = {}) {
     const controller = new AbortController();
     runtime.fetchAbort = controller;
 
     els.loadErrorBox.hidden = true;
     setAudioStatus('読み込み中...', 'loading');
-    showLoadProgress('GoogleドライブからMP3を読み込み中...', 4);
+    showLoadProgress('MP3を読み込み中...', 4);
 
     try {
       const response = await fetch(directUrl, {
@@ -533,16 +757,15 @@
       const contentType = (response.headers.get('content-type') || '').toLowerCase();
       if (contentType.includes('text/html')) {
         throw new Error(
-          'Googleドライブから音声ではなくHTMLページが返されました。ファイルの共有設定が「リンクを知っている全員（閲覧者）」になっているかご確認ください。'
+          '音声データではなくHTMLページが返されました。URLが直接音声ファイルを指しているか、共有権限をご確認ください。'
         );
       }
 
       const totalBytes = parseInt(response.headers.get('content-length') || '0', 10) || 0;
       if (totalBytes > MAX_BLOB_FETCH_BYTES) {
-        // 35MBを超える大きな音声はメモリ保護のため直接ストリーミングへ切替
         controller.abort();
         loadViaDirectStream(directUrl);
-        return;
+        return true;
       }
 
       let chunks = [];
@@ -571,9 +794,8 @@
         received = buf.byteLength;
       }
 
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted) return true;
 
-      // 結合して Blob + ArrayBuffer を作成
       const combined = new Uint8Array(received);
       let offset = 0;
       for (const chunk of chunks) {
@@ -581,12 +803,9 @@
         offset += chunk.byteLength;
       }
 
-      // 念のため先頭がHTMLでないか再チェック
       const headAscii = String.fromCharCode(...combined.subarray(0, 64)).trim().toLowerCase();
       if (headAscii.startsWith('<!doctype') || headAscii.startsWith('<html')) {
-        throw new Error(
-          '音声データではなくHTMLページが返されました。Googleドライブの共有権限が「リンクを知っている全員」になっているか確認してください。'
-        );
+        throw new Error('音声データではなくHTMLページが返されました。');
       }
 
       const mimeType = contentType.startsWith('audio/') ? contentType : 'audio/mpeg';
@@ -598,7 +817,6 @@
       els.audio.src = blobUrl;
       els.audio.load();
 
-      // タイトルが仮名だった場合は ID3 タグの曲名を自動反映
       if (track.title === 'Google Drive MP3' || track.title.startsWith('Drive音声 ')) {
         const id3Title = parseId3Title(combined.buffer);
         if (id3Title) {
@@ -611,22 +829,22 @@
 
       hideLoadProgress();
       setAudioStatus('再生可能', 'ready');
-
-      // バックグラウンドで実波形をデコード
       decodeWaveformAsync(combined.buffer.slice(0));
+      return true;
     } catch (err) {
-      if (err && err.name === 'AbortError') return;
-      console.warn('CORS fetch fallback:', err);
+      if (err && err.name === 'AbortError') return true;
+      console.warn('Fetch audio failed:', err);
 
-      // HTML応答エラー（共有設定ミス）はそのまま分かりやすく表示
-      if (err && String(err.message).includes('HTML')) {
-        showLoadError(err.message);
-        return;
+      if (allowDirectStreamFallback && !String(err.message || '').includes('HTML')) {
+        loadViaDirectStream(directUrl);
+        return true;
       }
 
-      // それ以外のCORS/ネットワーク系は直接ストリーミングを自動試行
-      showToast('ストリーミング再生モードへ自動切替します');
-      loadViaDirectStream(directUrl);
+      showLoadError(
+        `音声の取得に失敗しました (${err.message || 'ネットワークエラー'})。`,
+        { isDrive: track.type === 'gdrive' }
+      );
+      return false;
     } finally {
       if (runtime.fetchAbort === controller) {
         runtime.fetchAbort = null;
@@ -638,12 +856,12 @@
     hideLoadProgress();
     els.loadErrorBox.hidden = true;
     setAudioStatus('ストリーミング読込中', 'loading');
-    els.audio.setAttribute('crossorigin', 'anonymous');
+    els.audio.removeAttribute('crossorigin');
     els.audio.src = directUrl;
     els.audio.load();
   }
 
-  /** Web Audio API で実際の音声ピーク配列を生成 */
+  /** Web Audio API で実際の音声ピーク配列と再生時間を生成 */
   async function decodeWaveformAsync(arrayBuffer) {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     if (!AudioCtx) return;
@@ -651,6 +869,9 @@
     try {
       ctx = new AudioCtx();
       const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+      if (Number.isFinite(audioBuffer.duration) && audioBuffer.duration > 0) {
+        runtime.decodedDuration = audioBuffer.duration;
+      }
       const channel = audioBuffer.getChannelData(0);
       const blockSize = Math.max(1, Math.floor(channel.length / WAVEFORM_BARS));
       const peaks = new Float32Array(WAVEFORM_BARS);
@@ -680,6 +901,9 @@
       }
 
       runtime.peaks = peaks;
+      updateTimeDisplays();
+      renderWaveformPins();
+      updateAbRepeatUi();
       drawWaveform();
     } catch (_) {
       // デコード非対応環境ではフォールバック波形のまま継続
@@ -717,7 +941,7 @@
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
 
-    const duration = els.audio.duration || 0;
+    const duration = getEffectiveDuration();
     const progress = runtime.isScrubbing
       ? runtime.scrubPercent
       : duration > 0
@@ -778,7 +1002,7 @@
   /** 波形上にタイムスタンプメモのピンを配置 */
   function renderWaveformPins() {
     const track = getCurrentTrack();
-    const duration = els.audio.duration || 0;
+    const duration = getEffectiveDuration();
     els.waveformPins.innerHTML = '';
     if (!track || !duration || duration <= 0) return;
 
@@ -804,7 +1028,7 @@
   }
 
   function updateAbRepeatUi() {
-    const duration = els.audio.duration || 0;
+    const duration = getEffectiveDuration();
     if (runtime.abStart !== null && runtime.abEnd !== null) {
       els.abRepeatBtn.classList.add('is-ab-set');
       els.abRepeatLabel.textContent = `A ${formatTime(runtime.abStart)}–${formatTime(runtime.abEnd)}`;
@@ -842,23 +1066,34 @@
   }
 
   function seekBy(deltaSec) {
-    const dur = els.audio.duration;
+    const dur = getEffectiveDuration();
     if (!Number.isFinite(dur) || dur <= 0) return;
-    const next = Math.max(0, Math.min(dur, els.audio.currentTime + deltaSec));
-    els.audio.currentTime = next;
+    const next = Math.max(0, Math.min(dur, (els.audio.currentTime || 0) + deltaSec));
+    if (els.audio.readyState >= 1) {
+      els.audio.currentTime = next;
+    } else {
+      runtime.pendingJumpSec = next;
+    }
     updateTimeDisplays();
     drawWaveform();
   }
 
   function jumpToTime(seconds, autoPlay = true) {
     const sec = Math.max(0, Number(seconds) || 0);
-    const dur = els.audio.duration;
-    if (!Number.isFinite(dur) || dur <= 0) {
+    const audioDur = els.audio.duration;
+
+    // iPhone Safari等でまだメタデータ未読込の場合も、タップ操作内で再生を開始しつつ到達時にジャンプ
+    if (els.audio.readyState < 1 || !Number.isFinite(audioDur) || audioDur <= 0) {
       runtime.pendingJumpSec = sec;
-      showToast(`${formatTime(sec)} へ移動待機中...`);
+      runtime.pendingAutoPlay = autoPlay;
+      if (autoPlay && els.audio.src) {
+        els.audio.play().catch(() => {});
+      }
+      showToast(`${formatTime(sec)} から再生準備中...`);
       return;
     }
-    els.audio.currentTime = Math.min(dur, sec);
+
+    els.audio.currentTime = Math.min(audioDur, sec);
     updateTimeDisplays();
     drawWaveform();
     if (autoPlay && els.audio.paused) {
@@ -878,10 +1113,10 @@
   }
 
   function updateTimeDisplays() {
-    const cur = runtime.isScrubbing && Number.isFinite(els.audio.duration)
-      ? runtime.scrubPercent * els.audio.duration
+    const dur = getEffectiveDuration();
+    const cur = runtime.isScrubbing && dur > 0
+      ? runtime.scrubPercent * dur
       : els.audio.currentTime || 0;
-    const dur = Number.isFinite(els.audio.duration) ? els.audio.duration : 0;
     const rem = Math.max(0, dur - cur);
 
     const curStr = formatTime(cur);
@@ -1681,24 +1916,81 @@
       }
     });
 
-    // 再試行・ストリーミング切替
+    // 再試行・公式プレイヤー・連携設定・取込ボタン
     els.retryLoadBtn.addEventListener('click', () => loadTrack(state.currentTrackKey));
-    els.streamFallbackBtn.addEventListener('click', () => loadTrack(state.currentTrackKey, { forceStream: true }));
+
+    els.embedFallbackBtn.addEventListener('click', () => {
+      const track = getCurrentTrack();
+      if (track && track.fileId) {
+        showDriveEmbed(track.fileId);
+      }
+    });
+
+    els.closeEmbedBtn.addEventListener('click', () => {
+      hideDriveEmbed();
+    });
+
+    els.openBridgeConfigBtn.addEventListener('click', () => {
+      setSourcePanelOpen(true);
+      if (els.driveBridgeDetails) {
+        els.driveBridgeDetails.open = true;
+        els.driveBridgeDetails.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    });
+
+    els.errorImportActionBtn.addEventListener('click', () => {
+      const track = getCurrentTrack();
+      if (track && track.sourceUrl) {
+        copyToClipboard(track.sourceUrl);
+        showToast('Googleドライブのリンクをコピーしました。開いたGitHub画面に貼り付けて実行してください');
+      }
+    });
+
+    // Googleドライブ直接連携設定（GAS URL / APIキー）の保存・クリア
+    els.saveBridgeBtn.addEventListener('click', () => {
+      state.gasUrl = (els.gasUrlInput.value || '').trim();
+      state.driveApiKey = (els.driveApiKeyInput.value || '').trim();
+      saveState();
+      showToast('Googleドライブ連携設定を保存しました');
+      setSourcePanelOpen(false);
+      loadTrack(state.currentTrackKey);
+    });
+
+    els.clearBridgeBtn.addEventListener('click', () => {
+      state.gasUrl = '';
+      state.driveApiKey = '';
+      els.gasUrlInput.value = '';
+      els.driveApiKeyInput.value = '';
+      saveState();
+      showToast('連携設定をクリアしました');
+    });
 
     // オーディオ要素イベント
-    els.audio.addEventListener('loadedmetadata', () => {
+    const handleMetadataReady = () => {
       setAudioStatus('再生可能', 'ready');
       els.loadErrorBox.hidden = true;
       const track = getCurrentTrack();
 
-      if (runtime.pendingJumpSec !== null) {
-        const target = Math.min(els.audio.duration || runtime.pendingJumpSec, runtime.pendingJumpSec);
+      if (runtime.pendingJumpSec !== null && Number.isFinite(els.audio.duration) && els.audio.duration > 0) {
+        const target = Math.min(els.audio.duration, runtime.pendingJumpSec);
         els.audio.currentTime = target;
         runtime.pendingJumpSec = null;
-      } else if (track && track.lastPosition > 1 && track.lastPosition < (els.audio.duration || 0) - 2) {
+        if (runtime.pendingAutoPlay && els.audio.paused) {
+          els.audio.play().catch(() => {});
+        }
+        runtime.pendingAutoPlay = false;
+      } else if (track && track.lastPosition > 1 && track.lastPosition < (els.audio.duration || 0) - 2 && els.audio.currentTime < 0.5) {
         els.audio.currentTime = track.lastPosition;
       }
 
+      updateTimeDisplays();
+      renderWaveformPins();
+      updateAbRepeatUi();
+      drawWaveform();
+    };
+
+    els.audio.addEventListener('loadedmetadata', handleMetadataReady);
+    els.audio.addEventListener('durationchange', () => {
       updateTimeDisplays();
       renderWaveformPins();
       updateAbRepeatUi();
@@ -1733,8 +2025,13 @@
 
     els.audio.addEventListener('error', () => {
       if (!els.audio.src) return;
+      const track = getCurrentTrack();
+      const isDrive = Boolean(track && track.type === 'gdrive');
       showLoadError(
-        '音声ファイルの再生に失敗しました。Googleドライブの公開設定（「リンクを知っている全員」）や通信状況をご確認のうえ再試行してください。'
+        isDrive
+          ? '音声ファイルの読み込みに失敗しました。下の「再試行」または「Google公式プレイヤーで再生」をお試しください。'
+          : '音声ファイルの再生に失敗しました。URLが直接音声ファイル（MP3等）を指しているかご確認のうえ再試行してください。',
+        { isDrive }
       );
     });
 
@@ -1745,7 +2042,7 @@
     };
 
     const showTooltipAt = (ratio) => {
-      const dur = els.audio.duration || 0;
+      const dur = getEffectiveDuration();
       if (dur <= 0) return;
       els.waveformTooltip.textContent = formatTime(ratio * dur);
       els.waveformTooltip.style.left = `${(ratio * 100).toFixed(2)}%`;
@@ -1753,7 +2050,7 @@
     };
 
     els.waveformContainer.addEventListener('pointerdown', (e) => {
-      if (!els.audio.duration) return;
+      if (getEffectiveDuration() <= 0) return;
       runtime.isScrubbing = true;
       runtime.scrubPercent = getRatioFromEvent(e);
       els.waveformContainer.setPointerCapture(e.pointerId);
@@ -1769,7 +2066,7 @@
         showTooltipAt(ratio);
         updateTimeDisplays();
         drawWaveform();
-      } else if (e.pointerType === 'mouse' && els.audio.duration > 0) {
+      } else if (e.pointerType === 'mouse' && getEffectiveDuration() > 0) {
         showTooltipAt(ratio);
       }
     });
@@ -1778,8 +2075,14 @@
       if (!runtime.isScrubbing) return;
       runtime.isScrubbing = false;
       const ratio = getRatioFromEvent(e);
-      if (els.audio.duration > 0) {
-        els.audio.currentTime = ratio * els.audio.duration;
+      const dur = getEffectiveDuration();
+      if (dur > 0) {
+        const target = ratio * dur;
+        if (els.audio.readyState >= 1) {
+          els.audio.currentTime = target;
+        } else {
+          jumpToTime(target, false);
+        }
       }
       els.waveformTooltip.hidden = true;
       updateTimeDisplays();
@@ -2096,7 +2399,9 @@
     });
 
     els.exportJsonBtn.addEventListener('click', () => {
-      const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
+      const safeState = { ...state };
+      delete safeState.driveApiKey;
+      const blob = new Blob([JSON.stringify(safeState, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -2227,7 +2532,12 @@
   async function init() {
     applyTheme();
     els.memoAuthorInput.value = state.authorName || '';
+    if (els.gasUrlInput) els.gasUrlInput.value = state.gasUrl || '';
+    if (els.driveApiKeyInput) els.driveApiKeyInput.value = state.driveApiKey || '';
     bindEvents();
+
+    // リポジトリ同梱の audio/tracks.json を先に読み込む
+    await loadHostedManifest();
 
     const targetKey = await applyIncomingUrlParams();
     await loadTrack(targetKey);
